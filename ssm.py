@@ -303,7 +303,7 @@ class Residual(nn.Module):
 
 class S4Model(nn.Module):
 
-    def __init__(self, in_chn, num_tokens, depth, transposed=False, dropout=0):
+    def __init__(self, in_chn, num_tokens, depth, transposed=False, dropout=0, **kernel_args):
         super().__init__()
         self.input_projection = nn.Conv1d(in_chn, num_tokens, 1)
 
@@ -312,7 +312,7 @@ class S4Model(nn.Module):
                 nn.Sequential(
                     Residual(
                         nn.Sequential(
-                            S4D(num_tokens, dropout=dropout),
+                            S4D(num_tokens, dropout=dropout, **kernel_args),
                             nn.Dropout1d(dropout),
                         )
                     ),
@@ -347,7 +347,7 @@ class YAMLLogger():
     def create_from_file(cls, path):
         assert path[-5:] == '.yaml'
         config = cls.load(path)
-        self = cls(path, config)
+        self = cls(path)
         return self
     
     @staticmethod
@@ -415,7 +415,7 @@ if __name__ == "__main__":
 
     lr = 1e-4
     n_epoch = 100
-    net = S4Model(in_chn, num_tokens, depth)
+    net = S4Model(in_chn, num_tokens, depth, lr=None)
     optimizer = Adam(net.parameters(), lr=lr, weight_decay=0.)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30)
 
