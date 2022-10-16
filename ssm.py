@@ -336,7 +336,7 @@ class S4Model(nn.Module):
         return x
 
 
-def training(net, loss_fn, ckpt_path, in_chn, timesteps, freq_band):
+def training(net, loss_fn, optimizer, n_epoch, scheduler, ckpt_path, in_chn, timesteps, freq_band):
 
     train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
     train_loader = DataLoader(train_set, batch_size=32, shuffle=False) 
@@ -350,12 +350,8 @@ def training(net, loss_fn, ckpt_path, in_chn, timesteps, freq_band):
     except:
         pass
 
-    lr = 1e-3
-    n_epoch = 100
 
     net = net.to(device)
-    optimizer = Adam(net.parameters(), lr=lr, weight_decay=0.)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30)
     print(f'Number of params: {sum([p.numel() for p in net.parameters()])}')
 
     net = net.train()
@@ -374,13 +370,19 @@ def training(net, loss_fn, ckpt_path, in_chn, timesteps, freq_band):
             num_items += x.shape[0]
         tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
         torch.save(net.state_dict(), f'{ckpt_path}')
-        scheduler.step()
+        if scheduler is not None: scheduler.step()
     net = net.eval()
 
 if __name__ == "__main__":
     in_chn, num_tokens, depth = 1, 128, 16
+
+    lr = 1e-3
+    n_epoch = 100
     net = S4Model(in_chn, num_tokens, depth)
+    optimizer = Adam(net.parameters(), lr=lr, weight_decay=0.)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30)
+
     ckpt_path = 'a.pth'
     timesteps = 1000 # 1000 -> 500, 500
     freq_band = [1, 50]
-    training(net, loss_fn_forecast, ckpt_path, in_chn, timesteps, freq_band)
+    training(net, loss_fn_forecast, optimizer, n_epoch, scheduler, ckpt_path, in_chn, timesteps, freq_band)
