@@ -366,7 +366,7 @@ def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, ckpt_pat
             avg_loss += loss.item() * x.shape[0]
             num_items += x.shape[0]
         tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
-        torch.save(net.state_dict(), f'{ckpt_path}')
+        if ckpt_path is not None: torch.save(net.state_dict(), f'{ckpt_path}')
         if scheduler is not None: scheduler.step()
     net = net.eval()
 
