@@ -336,13 +336,51 @@ class S4Model(nn.Module):
         return x
 
 
-def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, ckpt_path):
+import yaml
+class YAMLLogger():
+    def __init__(self, path):
+        assert path[-5:] == '.yaml'
+        self.path = path
+        self.config = {}
+
+    @classmethod
+    def create_from_file(cls, path):
+        assert path[-5:] == '.yaml'
+        config = cls.load(path)
+        self = cls(path, config)
+        return self
+    
+    @staticmethod
+    def load(path):
+        with open(path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+
+    @staticmethod
+    def save(path, config):
+        with open(path, 'w') as f:
+            yaml.dump(config, f)
+     
+    def record_append(self, key, value):
+        if key not in self.config.keys():
+            self.config[key] = []        
+        self.config[key].append(value)
+        self.save(self.path, self.config)
+    
+
+def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, path_ckpt, path_config):
 
     device = torch.device('cuda' if torch.cuda.is_available() else "cpu")
     nscheduler = ContinuousDDPMNoiseScheduler()
 
     try:
-        the_ckpt = torch.load(f'{ckpt_path}')
+        logger = YAMLLogger.create_from_file(path_config)
+    except:
+        logger = YAMLLogger(path_config)
+        logger.save(logger.path, logger.config)
+
+    try:
+        the_ckpt = torch.load(f'{path_ckpt}')
         net.load_state_dict(the_ckpt)
     except:
         pass
@@ -366,22 +404,25 @@ def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, ckpt_pat
             avg_loss += loss.item() * x.shape[0]
             num_items += x.shape[0]
         tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
-        if ckpt_path is not None: torch.save(net.state_dict(), f'{ckpt_path}')
+        if path_ckpt is not None: torch.save(net.state_dict(), f'{path_ckpt}')
         if scheduler is not None: scheduler.step()
+        logger.record_append('losses', avg_loss / num_items)
+
     net = net.eval()
 
 if __name__ == "__main__":
     in_chn, num_tokens, depth = 1, 128, 16
 
-    lr = 1e-3
+    lr = 1e-4
     n_epoch = 100
     net = S4Model(in_chn, num_tokens, depth)
     optimizer = Adam(net.parameters(), lr=lr, weight_decay=0.)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30)
 
-    ckpt_path = 'a.pth'
+    path_ckpt = 'ckpts/a.pth'
+    path_config = 'ckpts/config.yaml'
     timesteps = 1000 # 1000 -> 500, 500
     freq_band = [1, 50]
     train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
     train_loader = DataLoader(train_set, batch_size=32, shuffle=False) 
-    training(net, loss_fn_forecast, train_loader, optimizer, n_epoch, scheduler, ckpt_path)
+    training(net, loss_fn_forecast, train_loader, optimizer, n_epoch, scheduler, path_ckpt, path_config)
