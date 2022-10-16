@@ -336,10 +336,7 @@ class S4Model(nn.Module):
         return x
 
 
-def training(net, loss_fn, optimizer, n_epoch, scheduler, ckpt_path, in_chn, timesteps, freq_band):
-
-    train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=False) 
+def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, ckpt_path):
 
     device = torch.device('cuda' if torch.cuda.is_available() else "cpu")
     nscheduler = ContinuousDDPMNoiseScheduler()
@@ -385,4 +382,6 @@ if __name__ == "__main__":
     ckpt_path = 'a.pth'
     timesteps = 1000 # 1000 -> 500, 500
     freq_band = [1, 50]
-    training(net, loss_fn_forecast, optimizer, n_epoch, scheduler, ckpt_path, in_chn, timesteps, freq_band)
+    train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=False) 
+    training(net, loss_fn_forecast, optimizer, n_epoch, scheduler, ckpt_path)
