@@ -348,6 +348,7 @@ class YAMLLogger():
         assert path[-5:] == '.yaml'
         config = cls.load(path)
         self = cls(path)
+        self.config = config
         return self
     
     @staticmethod
