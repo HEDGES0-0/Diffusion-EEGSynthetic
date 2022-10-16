@@ -384,4 +384,4 @@ if __name__ == "__main__":
     freq_band = [1, 50]
     train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
     train_loader = DataLoader(train_set, batch_size=32, shuffle=False) 
-    training(net, loss_fn_forecast, optimizer, n_epoch, scheduler, ckpt_path)
+    training(net, loss_fn_forecast, train_loader, optimizer, n_epoch, scheduler, ckpt_path)
