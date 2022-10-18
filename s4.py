@@ -285,6 +285,60 @@ def power(L, A, v=None):
 
 """ HiPPO utilities """
 
+def dplr(scaling, N, rank=1, H=1, dtype=torch.float, real_scale=1.0, imag_scale=1.0, random_real=False, random_imag=False, normalize=False, diagonal=True, random_B=False):
+    assert dtype == torch.float or torch.double
+    dtype = torch.cfloat if dtype == torch.float else torch.cdouble
+
+    pi = torch.tensor(math.pi)
+    if random_real:
+        real_part = torch.rand(H, N//2)
+    else:
+        real_part = .5 * torch.ones(H, N//2)
+    if random_imag:
+        imag_part = N//2 * torch.rand(H, N//2)
+    else:
+        imag_part = repeat(torch.arange(N//2), 'n -> h n', h=H)
+
+    real_part = real_scale * real_part
+    if scaling == 'random':
+        imag_part = torch.randn(H, N//2)
+    elif scaling == 'real':
+        imag_part = 0 * imag_part
+        real_part = 1 + repeat(torch.arange(N//2), 'n -> h n', h=H)
+    elif scaling in ['linear', 'lin']:
+        imag_part = pi * imag_part
+    elif scaling in ['inverse', 'inv']: # Based on asymptotics of the default HiPPO matrix
+        imag_part = 1/pi * N * (N/(1+2*imag_part)-1)
+    elif scaling in ['inverse2', 'inv2']:
+        imag_part = 1/pi * N * (N/(1+imag_part)-1)
+    elif scaling in ['quadratic', 'quad']:
+        imag_part = 1/pi * (1+2*imag_part)**2
+    elif scaling in ['legs', 'hippo']:
+        w, _, _, _ = nplr('legsd', N)
+        imag_part = w.imag
+
+    else: raise NotImplementedError
+    imag_part = imag_scale * imag_part
+    w = -real_part + 1j * imag_part
+
+    # Initialize B
+    if random_B:
+        B = torch.randn(H, N//2, dtype=dtype)
+    else:
+        B = torch.ones(H, N//2, dtype=dtype)
+
+    if normalize:
+        norm = -B/w # (H, N) # Result if you integrate the kernel with constant 1 function
+        zeta = 2*torch.sum(torch.abs(norm)**2, dim=-1, keepdim=True) # Variance with a random C vector
+        B = B / zeta**.5
+
+    P = torch.randn(rank, H, N//2, dtype=dtype)
+    if diagonal: P = P * 0.0
+    V = torch.eye(N, dtype=dtype)[: :N//2] # Only used in testing
+    V = repeat(V, 'n m -> h n m', h=H)
+
+    return w, P, B, V
+    
 def ssm(measure, N, R, H, **ssm_args):
     """Dispatcher to create single SSM initialization
 
@@ -858,7 +912,8 @@ class S4(nn.Module):
 
         if self.gate is not None:
             y = self.output_gate(y * v)
-
+        
+        if state is None: return y
         return y, next_state
 
     def setup_step(self, **kwargs):
