@@ -171,19 +171,29 @@ class SineWave(Dataset):
 
 
 class ECG_dataset(Dataset):
-    def __init__(self, path='ECG_data_10000.npy', transposed=False):
+    def __init__(self, path='ECG_data_10000.npy', transposed=False, cutoff_freq=None):
         super().__init__()
         self.path = path
         self.transposed = transposed
         self.data = np.load(self.path)
+        self.data = torch.from_numpy(self.data.astype(np.float32))
+        freq = 100
+        if cutoff_freq is not None:
+            self.data = self._highpass_filter(self.data, freq, cutoff_freq)
+
+    @staticmethod
+    def _highpass_filter(data, freq, cutoff_freq):
+        device = data.device
+        data = highpass_biquad(data.cuda(), freq, cutoff_freq)
+        return data.to(device)
 
     def __len__(self):
         return self.data.shape[0]
 
     def __getitem__(self, index):
-        data = self.data[index]
+        data = self.data[index] # (C, L)
         if not self.transposed: data = data.transpose(1, 0)
-        return data.astype(np.float32)
+        return data
 
 
 def loss_fn(model, x, scheduler, eps=1e-5):
