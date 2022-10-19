@@ -170,6 +170,22 @@ class SineWave(Dataset):
         return x.T
 
 
+class ECG_dataset(Dataset):
+    def __init__(self, path='ECG_data_10000.npy', transposed=False):
+        super().__init__()
+        self.path = path
+        self.transposed = transposed
+        self.data = np.load(self.path)
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, index):
+        data = self.data[index]
+        if not self.transposed: data = data.transpose(1, 0)
+        return data.astype(np.float32)
+
+
 def loss_fn(model, x, scheduler, eps=1e-5):
     random_t = torch.rand(x.shape[0], device=x.device) * (1.-eps) + eps
     random_t = random_t[:, None, None] # (N, ) -> (N, 1, 1)
