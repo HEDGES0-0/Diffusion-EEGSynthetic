@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader, Dataset
 from torchaudio.functional import highpass_biquad
 
 
-
 class ContinuousDDPMNoiseScheduler():
     """
     ref:
@@ -364,7 +363,112 @@ class S4Model(nn.Module):
         return x
 
 
+from s4 import S4
+class GaussianFourierProjection(nn.Module):
+    def __init__(self, embed_dim, scale=30.):
+        super().__init__()
+        self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+
+    def forward(self, x):   # x is the time
+        x_porj = x[:, None] * self.W[None, :] * 2 * np.pi
+        return torch.cat([torch.sin(x_porj), torch.cos(x_porj)], dim = -1)
+
+
+class ResidualBlock(nn.Module):
+
+    def __init__(self, num_tokens, embedding_dim, **kwargs):
+        super().__init__()
+        self.diffusion_projection = nn.Sequential(
+            nn.Linear(embedding_dim, num_tokens),
+            Rearrange('b c -> b c 1')
+        )
+        
+        self.input_projection = nn.Conv1d(num_tokens, 2 * num_tokens, 1)
+        self.output_projection = nn.Conv1d(num_tokens, 2 * num_tokens, 1)
+
+        self.S4_1 = S4(2 * num_tokens, **kwargs)
+        self.ln1 = nn.Sequential(
+            Rearrange('b c l -> b l c'),
+            nn.LayerNorm(2 * num_tokens),
+            Rearrange('b l c -> b c l'),
+        )
+        self.S4_2 = S4(2 * num_tokens, **kwargs)
+        self.ln2 = nn.Sequential(
+            Rearrange('b c l -> b l c'),
+            nn.LayerNorm(2 * num_tokens),
+            Rearrange('b l c -> b c l'),
+        )
+
+    def forward(self, x, diffusion_emb):
+        # x(B, C, L)
+        # diffusion_emb(B, embedding_dim)
+
+        diffusion_emb = self.diffusion_projection(diffusion_emb) # (B, C, 1)
+        y = x + diffusion_emb
+
+        y = self.input_projection(y) # (B, 2C, L)
+        y = self.S4_1(y) # (B, 2C, L)
+        y = self.ln1(y)
+        y = self.S4_2(y) # (B, 2C, L)
+        y = self.ln2(y)
+
+        gate, filter = torch.chunk(y, 2, dim=1)
+        y = torch.sigmoid(gate) * torch.tanh(filter)  # (B, C, L)
+        y = self.output_projection(y) # (B, 2C, L)
+        residual, skip = torch.chunk(y, 2, dim=1)
+        return (x + residual) / math.sqrt(2.0), skip
+
+
+class SSSD(nn.Module):
+
+    def __init__(self, nscheduler, in_chn, num_tokens, depth, dropout=0, embedding_dim=128, transposed=False, **kwargs):
+        super().__init__()
+        self.diffusion_embedding = nn.Sequential(
+            GaussianFourierProjection(embed_dim=embedding_dim),
+            nn.Linear(embedding_dim, embedding_dim),
+            nn.SiLU(),
+            nn.Linear(embedding_dim, embedding_dim),
+            nn.SiLU()
+        )
+
+        self.input_projection = nn.Conv1d(in_chn, num_tokens, 1)
+        self.output_projection1 = nn.Conv1d(num_tokens, num_tokens, 1)
+        self.output_projection2 = nn.Conv1d(num_tokens, in_chn, 1)
+
+        self.residual_layers = nn.ModuleList(
+            [
+                ResidualBlock(num_tokens, embedding_dim, **kwargs)
+                for _ in range(depth)
+            ]
+        )
+
+        self.nscheduler = nscheduler
+        self.transposed = transposed
+
+    def forward(self, x, t):
+        # x(B, L, K) -> (transposed == False), (B, K, L) -> (transposed == True)
+        # t(B, 1, 1)
+        if not self.transposed: x = x.transpose(-1, -2)
+        diffusion_emb = self.diffusion_embedding(t.view(-1)) # (B, embedding_dim)
+        x = self.input_projection(x) # (B, C, L)
+
+        sum_skip = torch.zeros_like(x)
+        for layer in self.residual_layers:
+            x, skip = layer(x, diffusion_emb) # (B, C, L)
+            sum_skip = sum_skip + skip
+        
+        x = sum_skip / math.sqrt(len(self.residual_layers))
+        x = F.relu(self.output_projection1(x))
+        x = self.output_projection2(x) 
+
+        x = x / torch.sqrt(self.nscheduler.BETA(t))
+        if not self.transposed: x = x.transpose(-1, -2)
+        return x
+
+
 import yaml
+
+
 class YAMLLogger():
     def __init__(self, path):
         assert path[-5:] == '.yaml'
@@ -440,18 +544,24 @@ def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, path_ckp
     net = net.eval()
 
 if __name__ == "__main__":
-    in_chn, num_tokens, depth = 1, 128, 16
-
+    in_chn, num_tokens, depth = 12, 256, 36
     lr = 1e-4
-    n_epoch = 100
-    net = S4Model(in_chn, num_tokens, depth, lr=None)
-    optimizer = Adam(net.parameters(), lr=lr, weight_decay=0.)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30)
-
-    path_ckpt = 'ckpts/a.pth'
-    path_config = 'ckpts/config.yaml'
+    n_epoch = 30
     timesteps = 1000 # 1000 -> 500, 500
-    freq_band = [1, 50]
-    train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=False) 
-    training(net, loss_fn_forecast, train_loader, optimizer, n_epoch, scheduler, path_ckpt, path_config)
+
+    nscheduler = ContinuousDDPMNoiseScheduler()
+    net = SSSD(nscheduler, in_chn, num_tokens, depth, mode='diag', measure='diag-lin', bidirectional=True)
+    optimizer = Adam(net.parameters(), lr=lr, weight_decay=0.)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15)
+    # scheduler = None
+
+    # path_dataset = '/content/drive/MyDrive/Reproduction/State Space Models
+    path_dataset = '/content/drive/MyDrive/Reproduction/State Space Models/Datasets/ECG'
+    path_ckpt = f'{path_dataset}/ckpts/ckpt_c{in_chn}_t{timesteps}_ECG.pth'
+    path_config = f'{path_dataset}/ckpts/config_c{in_chn}_t{timesteps}_ECG.yaml'
+
+    # freq_band = [1, 20]
+    # train_set = SineWave(n_channels=in_chn, timesteps=timesteps, freq_band=freq_band)
+    train_set = ECG_dataset(path=f'{path_dataset}/ECG_data_10000.npy', cutoff_freq=0.5)
+    train_loader = DataLoader(train_set, batch_size=16, shuffle=True) 
+    training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, path_ckpt, path_config)
