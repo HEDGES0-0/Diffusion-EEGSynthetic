@@ -506,11 +506,12 @@ def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, path_ckp
     device = torch.device('cuda' if torch.cuda.is_available() else "cpu")
     nscheduler = ContinuousDDPMNoiseScheduler()
 
-    try:
-        logger = YAMLLogger.create_from_file(path_config)
-    except:
-        logger = YAMLLogger(path_config)
-        logger.save(logger.path, logger.config)
+    if path_config is not None:
+        try:
+            logger = YAMLLogger.create_from_file(path_config)
+        except:
+            logger = YAMLLogger(path_config)
+            logger.save(logger.path, logger.config)
 
     try:
         the_ckpt = torch.load(f'{path_ckpt}')
@@ -539,7 +540,7 @@ def training(net, loss_fn, train_loader, optimizer, n_epoch, scheduler, path_ckp
         tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
         if path_ckpt is not None: torch.save(net.state_dict(), f'{path_ckpt}')
         if scheduler is not None: scheduler.step()
-        logger.record_append('losses', avg_loss / num_items)
+        if path_config is not None: logger.record_append('losses', avg_loss / num_items)
 
     net = net.eval()
 
