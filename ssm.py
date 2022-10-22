@@ -1,4 +1,5 @@
 import math
+import os
 
 import numpy as np
 import opt_einsum as oe
@@ -11,7 +12,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
-from torchaudio.functional import highpass_biquad
+from torchaudio.functional import highpass_biquad, lowpass_biquad, resample
 
 
 class ContinuousDDPMNoiseScheduler():
@@ -197,6 +198,53 @@ class ECG_dataset(Dataset):
         return data
 
 
+class MI_dataset(Dataset):
+    
+    def __init__(self, path, subject=None, transposed=False, new_freq=None, freq_band=None, device='cuda'):
+        super().__init__()
+        self.path = path
+        self.transposed = transposed 
+        data = self.load_dataset(path, subject)
+        data = torch.from_numpy(data).to(device)
+
+        self.freq = 128 
+        if new_freq is not None: 
+            data = resample(data, self.freq, new_freq)
+            self.freq = new_freq
+        if freq_band is not None:
+            data = highpass_biquad(data, self.freq, freq_band[1])
+            data = lowpass_biquad(data, self.freq, freq_band[0])
+
+        self.data = data
+            
+
+    @staticmethod
+    def load_dataset(path, subject):
+        from os.path import join
+        sub_list = os.listdir(path)
+        if subject is not None:
+            assert subject in sub_list
+            sub_list = [subject]
+        sub_path = [join(path,sub) for sub in sub_list]
+        
+        data = np.empty((0, 64, 512))
+        for sub in sub_path:
+            files = os.listdir(sub)
+            files_path = [join(sub,file) for file in files]
+            for file in files_path:
+                data = np.concatenate([data, np.load(file)], axis=0)
+        
+        return data
+        
+    def __getitem__(self, index):
+        x = self.data[index] # (C, L)
+        if not self.transposed: x = x.transpose(1, 0)
+        return x
+
+    def __len__(self):
+        return self.data.shape[0]
+
+
 def loss_fn(model, x, scheduler, eps=1e-5):
     random_t = torch.rand(x.shape[0], device=x.device) * (1.-eps) + eps
     random_t = random_t[:, None, None] # (N, ) -> (N, 1, 1)
@@ -364,6 +412,8 @@ class S4Model(nn.Module):
 
 
 from s4 import S4
+
+
 class GaussianFourierProjection(nn.Module):
     def __init__(self, embed_dim, scale=30.):
         super().__init__()
