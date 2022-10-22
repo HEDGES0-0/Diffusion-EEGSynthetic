@@ -173,6 +173,7 @@ class SineWave(Dataset):
 
 
 class ECG_dataset(Dataset):
+
     def __init__(self, path='ECG_data_10000.npy', transposed=False, cutoff_freq=None):
         super().__init__()
         self.path = path
@@ -234,7 +235,7 @@ class MI_dataset(Dataset):
             for file in files_path:
                 data = np.concatenate([data, np.load(file)], axis=0)
         
-        return data
+        return data.astype(np.float32)
         
     def __getitem__(self, index):
         x = self.data[index] # (C, L)
